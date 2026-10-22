@@ -2,6 +2,7 @@
 import { addDays, dow, isHoliday } from "./dates.js";
 import { sampleState, PRESETS, newId } from "./defaults.js";
 import * as SC from "./schedule.js";
+import { buildIcs } from "./ics.js";
 
 const results = [];
 const check = (name, ok, detail = "") => results.push({ name, ok: !!ok, detail });
@@ -93,6 +94,21 @@ for (const mode of ["spread", "review"]) {
   check("回ごとの本は『第26回 午前…』の形で出る", /第2\d回/.test(a.label) && SC.qLabel(a).includes("午前"), SC.qLabel(a));
   const total = Object.values(p.m).flat().reduce((x, y) => x + y.n, 0);
   check("回ごとの本も合計600問を配り切る", total === 600, `${total}問`);
+}
+
+// 7. カレンダー書き出し(F-11)
+{
+  const st = sampleState(); plan(st);
+  const ics = buildIcs(st, "2026-10-22", new Date("2026-10-22T03:00:00Z"));
+  const ev = ics.split("BEGIN:VEVENT").slice(1);
+  const unfold = ics.replace(/\r\n /g, "");
+  check("今日から試験日までを書き出す(学習しない日は除く)", ev.length > 100 && unfold.includes("UID:20261102@st-planner") && unfold.includes("UID:20270220@st-planner"), `${ev.length}件`);
+  check("過去問の日は 17:00〜20:00(日本時間)= 08:00〜11:00 UTC", unfold.includes("DTSTART:20261102T080000Z") && unfold.includes("DTEND:20261102T110000Z"));
+  check("件名に分野と問題数が入る", unfold.includes("SUMMARY:【ST国試】過去問 Ⅻ 発声発語・摂食嚥下障害学 48問"));
+  check("試験日は終日の予定", unfold.includes("DTSTART;VALUE=DATE:20270220"));
+  check("模試の日は模試の時間から", /SUMMARY:【ST国試】模試: 模試1/.test(unfold) && unfold.includes("DTSTART:20261206T000000Z"));
+  check("1行は75バイト以内に折り返す", ics.split("\r\n").every(l => new TextEncoder().encode(l).length <= 75));
+  check("カンマ・改行をエスケープする", !/DESCRIPTION:[^\r]*\n(?! )/.test(ics.replace(/\r\n/g, "\r")) && unfold.includes("\\n"));
 }
 
 // 6. 祝日の計算

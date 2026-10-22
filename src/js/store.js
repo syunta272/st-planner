@@ -38,16 +38,21 @@ async function writeNow(state) {
 }
 
 // バックアップ(F-13): 設定と記録をすべて1つのファイルに書き出す
-export async function exportBackup(state, filename) {
+export function exportBackup(state, filename) {
   const text = JSON.stringify({ app: "st-planner", version: 1, exportedAt: new Date().toISOString(), state }, null, 1);
+  return saveTextFile(text, filename, "バックアップ", "json", "application/json");
+}
+
+// ファイルを書き出す。デスクトップでは保存先を選ぶ画面、ブラウザではダウンロード。
+export async function saveTextFile(text, filename, kind, ext, mime) {
   if (isDesktop() && tauri().dialog) {
-    const path = await tauri().dialog.save({ defaultPath: filename, filters: [{ name: "バックアップ", extensions: ["json"] }] });
+    const path = await tauri().dialog.save({ defaultPath: filename, filters: [{ name: kind, extensions: [ext] }] });
     if (!path) return false;
     await tauri().fs.writeTextFile(path, text);
     return true;
   }
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+  a.href = URL.createObjectURL(new Blob([text], { type: mime }));
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);

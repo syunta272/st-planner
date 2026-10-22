@@ -38,12 +38,12 @@ export function emptyState() {
       setupDone: false, setupDate: null, examDate: "2027-02-20",
       weekday: { start: "17:00", end: "20:00" }, holiday: { start: "17:00", end: "20:00" }, breakMin: 10,
       qStart: "", qEnd: "", mpq: 1, reviewDow: 0, offDows: [], holidayStudy: true, leftover: "spread",
-      targetRate: 70, weightRatio: { thick: 3, normal: 2, light: 1 }, lastBackup: null, theme: "system", fontScale: 1,
+      targetRate: 70, weightRatio: { thick: 3, normal: 2, light: 1 }, lastBackup: null, theme: "system", fontScale: 1, calendar: false, lastIcsExport: null,
     },
     areas: AREAS.map(name => ({ name, weight: "normal" })),
     books: [],
     specials: SCHOOL_MOCKS.map(m => ({ id: newId(), type: "mock", name: m.name, start: m.start, from: "09:00", to: "16:00" })),
-    plan: null, done: {}, edits: {}, frozen: {}, frozenThrough: null, focus: {}, logs: [],
+    plan: null, done: {}, edits: {}, frozen: {}, frozenThrough: null, focus: {}, logs: [], icsStale: false,
   };
 }
 

@@ -1,7 +1,8 @@
 import * as D from "./dates.js";
 import { PRESETS, WEIGHTS, emptyState, sampleState, distributeByDb, newId } from "./defaults.js";
 import * as SC from "./schedule.js";
-import { loadState, saveState, exportBackup, parseBackup, readFileText } from "./store.js";
+import { loadState, saveState, exportBackup, saveTextFile, parseBackup, readFileText } from "./store.js";
+import { buildIcs } from "./ics.js";
 
 let state, view = "today", cur = D.today(), step = 0, quick = null, logEdit = null, logKind = "normal", setupErr = "";
 const $ = s => document.querySelector(s);
@@ -46,7 +47,7 @@ document.addEventListener("click", e => {
 function changed(p) {
   setupErr = "";
   if (/^settings\.(theme|fontScale)$/.test(p)) applyTheme();
-  else if (!/^settings\.(targetRate|lastBackup)$/.test(p)) replan();
+  else if (!/^settings\.(targetRate|lastBackup|calendar)$/.test(p)) replan();
   persist();
   render();
 }
@@ -54,6 +55,7 @@ function replan() {
   const t = D.today();
   if (state.settings.setupDone) SC.freezePast(state, t);
   state.plan = SC.generatePlan(state, t);
+  if (state.settings.calendar && state.settings.lastIcsExport) state.icsStale = true; // カレンダーの書き出し直しを促す
 }
 const persist = () => saveState(state);
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2200); }
@@ -82,6 +84,7 @@ const V = {
     const banners = [];
     const lastB = s.lastBackup || s.setupDate;
     if (lastB && D.diffDays(lastB, t) >= 7) banners.push(`<div class="banner">${s.lastBackup ? `最後のバックアップから${D.diffDays(lastB, t)}日たちました。` : "まだバックアップを書き出していません。"}パソコンの故障に備えて書き出しておきましょう。 <button class="p" data-act="backup">いま書き出す</button></div>`);
+    if (s.calendar && state.icsStale) banners.push(`<div class="banner info">計画が変わりました。Googleカレンダーの予定も新しくするには、書き出し直して読み込んでください。 <button class="p" data-act="ics">カレンダーに書き出す</button></div>`);
     if (cur === t) {
       const un = SC.unrecordedDays(state, t);
       if (un.length) banners.push(`<div class="banner info">記録がまだの日: ${un.map(d => `<button class="link" data-act="day" data-arg="${d}">${D.md(d)}</button>`).join(" ")}</div>`);
@@ -159,6 +162,14 @@ const V = {
       <div class="card"><h2>特別な日</h2>${specialsEditor()}</div>
       <div class="card"><h2>1周後の時間配分</h2><p class="mut">過去問1周の終了日より後は、重点度の比率で分野の日を割り振ります(比率は要件の未決事項。いまは仮の値)。</p>
       <div class="row">${WEIGHTS.map(([k, l]) => field(l, num(`settings.weightRatio.${k}`, 'min="0"'))).join("")}</div></div>
+      <div class="card"><h2>Googleカレンダー</h2><div class="row">${chk("settings.calendar", "Googleカレンダーに予定を入れる")}</div>
+      ${s.calendar ? `<p class="mut">今日から試験日までの予定を1日1件ずつカレンダー用のファイル(.ics)に書き出します。件名は「【ST国試】過去問 Ⅻ … 48問」のようになり、時間割は予定の説明に入ります。</p>
+      <div class="row"><button class="p" data-act="ics">カレンダーに書き出す</button><span class="mut">最後の書き出し: ${s.lastIcsExport ? esc(D.label(s.lastIcsExport)) : "まだありません"}</span></div>
+      <h3>Googleカレンダーへの読み込み方(パソコンのブラウザで)</h3>
+      <ol class="mut"><li>はじめてのときだけ: 設定 →「カレンダーを追加」→「新しいカレンダーを作成」で「ST国試」カレンダーを作る</li>
+      <li>右上の歯車 →「設定」→ 左の「インポート/エクスポート」</li>
+      <li>「パソコンからファイルを選択」で書き出したファイルを選び、追加先を「ST国試」にして「インポート」</li></ol>
+      <p class="mut">計画が変わったら、書き出し直して同じように読み込みます。予定が二重になったときは、「ST国試」カレンダーを削除して作り直してから読み込んでください。</p>` : `<p class="mut">オンにすると、勉強の予定をGoogleカレンダーに入れられます。使わない人はオフのままで大丈夫です。</p>`}</div>
       <div class="card"><h2>表示</h2><div class="row">${field("テーマ", sel("settings.theme", [["system", "パソコンに合わせる"], ["light", "ライト"], ["dark", "ダーク"]]))}${field("文字サイズ", sel("settings.fontScale", [[0.9, "小"], [1, "標準"], [1.15, "大"], [1.3, "特大"]], true))}</div></div>
       <div class="card"><h2>データのバックアップ</h2><p class="mut">設定と記録をすべて1つのファイルに書き出し、読み込んで元に戻せます。最後の書き出し: ${s.lastBackup ? esc(D.label(s.lastBackup)) : "まだありません"}</p>
       <div class="row"><button class="p" data-act="backup">書き出す</button><label class="field"><span>バックアップから元に戻す</span><input type="file" accept=".json,application/json" data-file="restore"></label></div></div>`;
@@ -318,6 +329,12 @@ const ACT = {
   delRound(a) { const [i, j] = a.split(".").map(Number); state.books[i].rounds.splice(j, 1); replan(); persist(); render(); },
   async backup() {
     if (await exportBackup(state, `st-planner-backup-${D.today()}.json`)) { state.settings.lastBackup = D.today(); persist(); render(); toast("バックアップを書き出しました"); }
+  },
+  async ics() {
+    const t = D.today();
+    if (await saveTextFile(buildIcs(state, t), "st-planner.ics", "カレンダー", "ics", "text/calendar")) {
+      Object.assign(state.settings, { lastIcsExport: t }); state.icsStale = false; persist(); render(); toast("カレンダー用のファイルを書き出しました");
+    }
   },
   loadSample() { state = sampleState(); replan(); step = 5; persist(); render(); },
   next() { setupErr = validateStep(); if (!setupErr) step++; render(); scrollTo(0, 0); },
