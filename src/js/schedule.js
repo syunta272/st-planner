@@ -92,6 +92,8 @@ export function allocate(units, D) {
 }
 
 export const isDone = (st, ds, a) => (st.done[ds] || []).includes(a.key);
+// 回した解き残しの元の問題が、あとから元の日にチェックされたか
+const originDone = (st, a) => !!a.originDate && (st.done[a.originDate] || []).includes(a.originKey);
 
 function nextReviewDay(st, from) {
   const s = st.settings;
@@ -117,26 +119,29 @@ function moveHolidays(st, m, D) {
   }
 }
 
-// 計画の作成と作り直し(F-04・F-10・F-12)。fromDate より前の日はそのまま残し、
+// 計画の作成と作り直し(F-04・F-10)。前提条件を変えたときに使う。fromDate より前の日はそのまま残し、
 // 済んでいない問題は設定に応じて残りの学習日に配り直すか、次の復習の日に回す。
+// 昨日の分は今日まだできるので、配り直さずに残す。
 export function generatePlan(st, fromDate) {
   const s = st.settings, units = buildUnits(st), keys = new Set(units.map(u => u.key));
-  const old = st.plan?.m || {}, m = {}, used = {}, carry = [];
+  const old = st.plan?.m || {}, m = {}, used = {}, carry = [], yesterday = addDays(fromDate, -1);
   const use = a => (used[a.unit] ||= []).push(...a.ranges);
   for (const ds of Object.keys(old).sort()) for (const a0 of old[ds]) {
     const a = { ...a0 };
     if (ds >= fromDate) { // 未来の日は作り直す。復習の日に回した解き残しと、もう済ませた分は残す
-      if ((a.carried || isDone(st, ds, a)) && keys.has(a.unit)) { (m[ds] ||= []).push(a); use(a); }
+      if (keys.has(a.unit) && (isDone(st, ds, a) || (a.carried && !originDone(st, a)))) { (m[ds] ||= []).push(a); use(a); }
       continue;
     }
     (m[ds] ||= []).push(a);
-    if (!keys.has(a.unit) || a.moved) continue;
-    if (isDone(st, ds, a)) { use(a); continue; }
+    if (!keys.has(a.unit)) continue;
+    if (isDone(st, ds, a)) { use(a); continue; } // 回したあとで元の日にチェックした分も、済んだものとして数える
+    if (a.moved) continue;
+    if (ds >= yesterday) { use(a); continue; }
     a.moved = true;
-    if (s.leftover === "review") carry.push(a);
+    if (s.leftover === "review") carry.push([ds, a]);
   }
   const rd = carry.length && nextReviewDay(st, fromDate);
-  if (rd) for (const a of carry) { const c = { ...a, moved: false, carried: true, origin: a.origin || "" }; (m[rd] ||= []).push(c); use(c); }
+  if (rd) for (const [ds, a] of carry) { const c = { ...a, moved: false, extra: false, carried: true, originDate: ds, originKey: a.key }; (m[rd] ||= []).push(c); use(c); }
 
   const live = units.map(u => {
     const remaining = complement(u.q, used[u.key] || []);
@@ -148,6 +153,48 @@ export function generatePlan(st, fromDate) {
   for (const [ds, list] of Object.entries(r.m)) (m[ds] ||= []).push(...list);
   moveHolidays(st, m, D);
   return { m, ok: r.ok, days: D.length, units: live.length, total: sum(live.map(u => u.count)), blocks: r.blocks.map(b => ({ label: b.unit.label, count: b.unit.count, days: b.days })), from: fromDate };
+}
+
+// 毎日アプリを開いたときの解き残しの扱い(F-12)。計画は組み直さず、足すだけにする。
+// - 昨日の分は「昨日の残り」として今日できるので、まだ回さない(一昨日より前の分だけ回す)。
+// - 残りの学習日に回す設定なら、次の学習日(最大5日)に少しずつ足す。復習の日に回す設定なら、次の復習の日にまとめる。
+// - 回したあとで元の日にチェックしたら、回した分(まだ済んでいないもの)を取り消す。
+// 計画が変わったら true を返す。
+export function absorbLeftovers(st, today) {
+  const s = st.settings, cutoff = addDays(today, -1), m = {}, items = [];
+  let changed = false;
+  for (const ds of Object.keys(st.plan?.m || {}).sort()) for (const a0 of st.plan.m[ds]) {
+    const a = { ...a0 };
+    if ((a.extra || a.carried) && !isDone(st, ds, a) && originDone(st, a)) { changed = true; continue; }
+    (m[ds] ||= []).push(a);
+    if (ds < cutoff && !a.moved && !isDone(st, ds, a)) { a.moved = true; items.push([ds, a]); changed = true; }
+  }
+  if (!changed) return false;
+  const rd = s.leftover === "review" ? nextReviewDay(st, today) : null, days = [];
+  if (!rd) for (let d = today, i = 0; s.qEnd && d <= s.qEnd && days.length < 5 && i < 60; d = addDays(d, 1), i++)
+    if (isStudyDay(st, d) && (s.holidayStudy || !isHoliday(d))) days.push(d);
+  const fallback = rd || (!days.length && nextReviewDay(st, today));
+  for (const [ds, a] of items) {
+    const base = { unit: a.unit, label: a.label, area: a.area, round: a.round, tot: a.tot, originDate: ds, originKey: a.key };
+    if (fallback) { (m[fallback] ||= []).push({ ...base, key: a.key, ranges: a.ranges, n: a.n, carried: true }); continue; }
+    if (!days.length) { a.moved = false; continue; } // 回す先がない(期間の最後など)
+    const k = Math.min(days.length, Math.max(1, Math.ceil(a.n / 10)));
+    let off = 0;
+    for (let i = 0; i < k; i++) {
+      const cnt = Math.round(a.n * (i + 1) / k) - off, rs = take(a.ranges, off, cnt);
+      off += cnt;
+      if (cnt > 0) (m[days[i]] ||= []).push({ ...base, key: `q:${a.unit}:${rs.map(r => r.join("-")).join(",")}`, ranges: rs, n: count(rs), extra: true });
+    }
+  }
+  st.plan = { ...st.plan, m };
+  return true;
+}
+
+// 昨日の分で、まだ回していない問題(今日の画面に「昨日の残り」として出す)。
+// 今日の画面でチェックした分は done[今日] に "late:<key>" を残し、チェック後も表示し続ける。
+export function pendingFromYesterday(st, today) {
+  const y = addDays(today, -1), late = st.done[today] || [];
+  return (st.plan?.m[y] || []).filter(a => !a.moved && (!isDone(st, y, a) || late.includes("late:" + a.key)));
 }
 
 // 1周後(過去問の終了日〜直前期)は、重点度の比率で分野の日を割り振る。
@@ -219,7 +266,7 @@ export function computeDay(st, ds) {
   const focus = focusFor(st, ds), weak = focus ? `(弱点: ${focus})` : "";
   const rest = used => Math.max(0, total - used - s.breakMin - 20);
   if (list.length) {
-    const qs = list.map(a => [qLabel(a) + (a.fromHoliday ? "(祝日分)" : ""), qMin(s, a), a]);
+    const qs = list.map(a => [qLabel(a) + (a.fromHoliday ? "(祝日分)" : a.extra ? "(解き残し)" : ""), qMin(s, a), a]);
     return blocks(start, [...pre, ...qs, BR, ["過去問でわからなかった所をテキスト・必修チェックで確認" + weak, rest(sum([...pre, ...qs].map(x => x[1])))], ["間違いノート・進捗入力", 20]]);
   }
   const post = s.qEnd && ds > s.qEnd ? postMap(st)[ds] : undefined;
@@ -243,10 +290,6 @@ export function freezePast(st, today) {
   for (let g = 0; d <= y && g < 800; g++, d = addDays(d, 1)) if (!st.frozen[d]) st.frozen[d] = computeDay(st, d);
   if (!st.frozenThrough || y > st.frozenThrough) st.frozenThrough = y;
 }
-
-// 過ぎた日に済んでいない問題があり、まだ回し先を決めていないか
-export const hasPendingLeftover = (st, today) =>
-  Object.entries(st.plan?.m || {}).some(([ds, l]) => ds < today && l.some(a => !a.moved && !isDone(st, ds, a)));
 
 // 1日の合計時間が学習時間帯に入りきらない日(受け入れ条件3)
 export function overflowDays(st) {

@@ -74,7 +74,7 @@ for (const mode of ["spread", "review"]) {
   const days = Object.keys(st.plan.m).sort(), d1 = days[0], d2 = days[1];
   st.done[d1] = st.plan.m[d1].map(a => a.key); // 1日目だけ済ませ、2日目は解き残す
   const left = st.plan.m[d2][0];
-  st.plan = SC.generatePlan(st, addDays(d2, 1));
+  st.plan = SC.generatePlan(st, addDays(d2, 2)); // 昨日の分は残すので、2日後に作り直す
   const all = Object.entries(st.plan.m).filter(([d]) => d > d2).flatMap(([, l]) => l);
   const covered = all.filter(a => a.unit === left.unit).some(a => a.ranges.some(([f, t]) => f <= left.ranges[0][0] && left.ranges[0][0] <= t));
   const total = all.reduce((a, x) => a + x.n, 0) + st.plan.m[d1].reduce((a, x) => a + x.n, 0);
@@ -85,6 +85,39 @@ for (const mode of ["spread", "review"]) {
     check("解き残しは次の復習の日(日曜)に入る", rd && dow(rd) === 0, rd);
     check("復習の日の時間割に解き残しが出る", SC.computeDay(st, rd)[0].label.includes("解き残し"), SC.computeDay(st, rd)[0].label);
   }
+}
+
+// 4b. 毎日の解き残し(absorbLeftovers): 計画は組み直さず、足すだけ。翌日に終わらせたら吸収する
+for (const mode of ["spread", "review"]) {
+  const name = mode === "spread" ? "残りの日" : "復習の日";
+  const st = sampleState(); st.settings.leftover = mode;
+  st.plan = SC.generatePlan(st, "2026-11-01");
+  const days = Object.keys(st.plan.m).sort(), d1 = days[0], d2 = days[1];
+  st.done[d1] = st.plan.m[d1].map(a => a.key);
+  const left = st.plan.m[d2][0], baseBefore = JSON.stringify(Object.entries(st.plan.m).filter(([d]) => d > d2).sort());
+  const live = () => Object.entries(st.plan.m).flatMap(([, l]) => l).filter(a => !a.moved).reduce((x, a) => x + a.n, 0);
+  // 翌日: まだ回さず「昨日の残り」に出る
+  const next = addDays(d2, 1);
+  check(`[${name}] 翌日はまだ回さない`, !SC.absorbLeftovers(st, next));
+  check(`[${name}] 翌日の画面に昨日の残りが出る`, SC.pendingFromYesterday(st, next).some(a => a.key === left.key));
+  // 2日後: 回すが、もとの計画は変えない
+  const later = addDays(d2, 2);
+  check(`[${name}] 2日後に回す`, SC.absorbLeftovers(st, later));
+  const baseAfter = JSON.stringify(Object.entries(st.plan.m).filter(([d]) => d > d2).map(([d, l]) => [d, l.filter(a => !a.extra && !a.carried)]).filter(([, l]) => l.length).sort());
+  check(`[${name}] もとの計画は1日もずれない`, baseAfter === baseBefore);
+  check(`[${name}] 回したあとも合計は2300`, live() === 2300, `${live()}問`);
+  const copies = Object.entries(st.plan.m).flatMap(([d, l]) => l.filter(a => a.originKey === left.key).map(a => [d, a]));
+  check(`[${name}] 回し先に入る`, copies.length > 0 && copies.reduce((x, [, a]) => x + a.n, 0) === left.n, copies.map(([d, a]) => `${d}:${a.n}`).join(" "));
+  if (mode === "spread") check("[残りの日] 次の学習日に少しずつ足す(最大5日)", copies.length > 1 && copies.length <= 5 && copies.every(([d]) => d >= later));
+  else check("[復習の日] 次の日曜にまとめる", copies.length === 1 && dow(copies[0][0]) === 0);
+  // そのあとで元の日にチェックした(遅れてやった) → 回した分を取り消す
+  st.done[d2] = [left.key];
+  check(`[${name}] 元の日にあとからチェックすると回した分を取り消す`, SC.absorbLeftovers(st, later) && !Object.values(st.plan.m).flat().some(a => a.originKey === left.key));
+  check(`[${name}] 取り消したあとも合計は2300(遅れて済ませた分を含む)`, live() + left.n === 2300, `${live() + left.n}問`);
+  // 作り直し(設定変更)でも、遅れて済ませた分を二重に数えない
+  st.plan = SC.generatePlan(st, later);
+  const cover = Object.entries(st.plan.m).filter(([d]) => d >= later).flatMap(([, l]) => l).filter(a => a.unit === left.unit && a.ranges.some(([f, t]) => f <= left.ranges[0][0] && left.ranges[0][0] <= t));
+  check(`[${name}] 作り直しても済ませた問題は入らない`, cover.length === 0);
 }
 
 // 5. 回ごとの問題集は回と問題番号で割り振る

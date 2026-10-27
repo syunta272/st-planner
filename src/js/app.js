@@ -80,7 +80,7 @@ function countdown() {
 
 const V = {
   today() {
-    const t = D.today(), s = state.settings, tasks = SC.dayTasks(state, cur, t), done = state.done[cur] || [];
+    const t = D.today(), s = state.settings, tasks = todayList();
     const banners = [];
     const lastB = s.lastBackup || s.setupDate;
     if (lastB && D.diffDays(lastB, t) >= 7) banners.push(`<div class="banner">${s.lastBackup ? `最後のバックアップから${D.diffDays(lastB, t)}日たちました。` : "まだバックアップを書き出していません。"}パソコンの故障に備えて書き出しておきましょう。 <button class="p" data-act="backup">いま書き出す</button></div>`);
@@ -94,11 +94,12 @@ const V = {
       <p class="mut">${esc(D.label(cur))} · <span class="countdown">${esc(countdown())}</span></p>
       ${banners.join("")}
       <div class="card"><div class="datenav"><button data-act="day" data-arg="-1">前の日</button>${`<input type="date" id="cur" value="${cur}">`}<button data-act="day" data-arg="1">次の日</button>${cur !== t ? `<button data-act="day" data-arg="${t}">今日へ</button>` : ""}</div>
+      ${tasks.some(x => x.at) ? `<p class="mut">昨日の残りは、今日やれば計画はそのままです。今日もできなかった分は、明日「${s.leftover === "review" ? "次の復習の日" : "次の学習日"}」に回します。</p>` : ""}
       <ul class="tasks">${tasks.map(x => {
-        const on = done.includes(x.key);
-        return `<li class="${on ? "done" : ""}"><label><input type="checkbox" data-act="toggle" data-arg="${esc(x.key)}" ${on ? "checked" : ""}><span>${esc(x.label)}</span></label>${quick === x.key && x.assign ? quickForm(x) : ""}</li>`;
+        const on = (state.done[x.at || cur] || []).includes(x.key);
+        return `<li class="${on ? "done" : ""}"><label><input type="checkbox" data-act="toggle" data-arg="${esc(x.key)}" data-at="${x.at || ""}" ${on ? "checked" : ""}><span>${x.at ? '<span class="tag">昨日の残り</span> ' : ""}${esc(x.label)}</span></label>${quick === x.key && x.assign ? quickForm(x) : ""}</li>`;
       }).join("") || `<li class="mut">この日の予定はありません</li>`}</ul>
-      <details><summary class="mut">この日のタスクを編集</summary><p class="mut">1行が1つのタスクです。</p><textarea id="ed" rows="8">${esc(tasks.map(x => x.label).join("\n"))}</textarea>
+      <details><summary class="mut">この日のタスクを編集</summary><p class="mut">1行が1つのタスクです。</p><textarea id="ed" rows="8">${esc(tasks.filter(x => !x.at).map(x => x.label).join("\n"))}</textarea>
       <div class="row"><button class="p" data-act="editSave">保存</button>${state.edits[cur] ? `<button data-act="editReset">自動に戻す</button>` : ""}</div></details></div>`;
   },
 
@@ -267,15 +268,16 @@ function validateStep() {
 const ACT = {
   go(v) { view = v; quick = null; logEdit = null; render(); },
   day(a) { cur = /^-?\d+$/.test(a) ? D.addDays(cur, +a) : a; quick = null; view = "today"; render(); },
-  toggle(key) {
-    const list = state.done[cur] ||= [], i = list.indexOf(key);
-    if (i >= 0) { list.splice(i, 1); if (quick === key) quick = null; }
-    else { list.push(key); const x = SC.dayTasks(state, cur, D.today()).find(t => t.key === key); quick = x?.assign ? key : null; }
+  toggle(key, el) {
+    const at = el?.dataset.at || "", list = state.done[at || cur] ||= [], i = list.indexOf(key);
+    const late = state.done[cur] ||= [], mark = "late:" + key;
+    if (i >= 0) { list.splice(i, 1); if (at && late.includes(mark)) late.splice(late.indexOf(mark), 1); if (quick === key) quick = null; }
+    else { list.push(key); if (at && !late.includes(mark)) late.push(mark); const x = todayList().find(t => t.key === key); quick = x?.assign ? key : null; }
     persist(); render();
     if (quick) $("#q-correct")?.focus();
   },
   quickSave(key) {
-    const x = SC.dayTasks(state, cur, D.today()).find(t => t.key === key);
+    const x = todayList().find(t => t.key === key);
     addLog({ date: cur, kind: "normal", area: $("#q-area").value === "" ? null : +$("#q-area").value, minutes: +$("#q-min").value || 0, solved: +$("#q-solved").value || 0, correct: $("#q-correct").value === "" ? null : +$("#q-correct").value, memo: x?.assign?.label || "" });
     quick = null; persist(); render(); toast("記録しました");
   },
@@ -373,6 +375,18 @@ const FILE = {
   },
 };
 
+// 表示中の日のタスク。今日なら先頭に「昨日の残り」を付ける(at = 元の日付。チェックは元の日に付く)
+function todayList() {
+  const t = D.today(), tasks = SC.dayTasks(state, cur, t);
+  if (cur !== t) return tasks;
+  const y = D.addDays(t, -1), mpq = state.settings.mpq;
+  const pend = SC.pendingFromYesterday(state, t).map(a => {
+    const min = Math.max(5, Math.round(a.n * mpq / 5) * 5);
+    return { key: a.key, at: y, min, label: `${SC.qLabel(a)} 約${min}分`, assign: { area: a.area, n: a.n, label: a.label, round: a.round } };
+  });
+  return [...pend, ...tasks];
+}
+
 /* ---------- 記録の補助 ---------- */
 function withRate(r) {
   if (r.solved > 0 && r.correct != null) r.rate = Math.round(r.correct / r.solved * 100);
@@ -429,7 +443,8 @@ document.addEventListener("change", e => { if (e.target.id === "cur" && e.target
   const t = D.today();
   if (state.settings.setupDone) {
     SC.freezePast(state, t);
-    if (!state.plan || SC.hasPendingLeftover(state, t)) state.plan = SC.generatePlan(state, t); // 解き残しを回す(F-12)
+    if (!state.plan) state.plan = SC.generatePlan(state, t);
+    else if (SC.absorbLeftovers(state, t) && state.settings.calendar && state.settings.lastIcsExport) state.icsStale = true; // 解き残しを回す(F-12)
     persist();
   } else if (!state.plan) state.plan = SC.generatePlan(state, t);
   render();
