@@ -54,7 +54,8 @@ function changed(p) {
 function replan() {
   const t = D.today();
   if (state.settings.setupDone) SC.freezePast(state, t);
-  state.plan = SC.generatePlan(state, t);
+  // 使い始めてからは、今日の予定はそのままにして明日から組み直す(今日に問題が足されないように)
+  state.plan = SC.generatePlan(state, state.settings.setupDone ? D.addDays(t, 1) : t);
   if (state.settings.calendar && state.settings.lastIcsExport) state.icsStale = true; // カレンダーの書き出し直しを促す
 }
 const persist = () => saveState(state);
