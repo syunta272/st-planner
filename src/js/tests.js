@@ -120,6 +120,31 @@ for (const mode of ["spread", "review"]) {
   check(`[${name}] 作り直しても済ませた問題は入らない`, cover.length === 0);
 }
 
+// 4c. 「振り直す」ボタン: 何日かできなかったとき、明日からの学習日にまとめて配り直す
+for (const includeToday of [false, true]) {
+  const label = includeToday ? "今日も含める" : "今日はそのまま";
+  const st = sampleState(); st.settings.setupDate = "2026-10-30";
+  st.plan = SC.generatePlan(st, "2026-11-01");
+  const days = Object.keys(st.plan.m).sort(); // 11/2, 11/3, 11/4, 11/5 ...
+  st.done[days[0]] = st.plan.m[days[0]].map(a => a.key); // 1日目だけ済ませ、2〜4日目はできなかった
+  const today = days[3], tomorrow = addDays(today, 1);
+  const todayKeys = st.plan.m[today].map(a => a.key);
+  SC.absorbLeftovers(st, today); // アプリを開いたときの処理(解き残しが次の日に積み上がる)
+  check(`[振り直し/${label}] 振り直す前は解き残しが積み上がっている`, SC.unfinishedCount(st, today) > 0, `${SC.unfinishedCount(st, today)}問`);
+  SC.respread(st, today, includeToday);
+  const live = Object.entries(st.plan.m).flatMap(([d, l]) => l.map(a => [d, a])).filter(([d, a]) => !a.moved || SC.isDone(st, d, a));
+  const total = live.reduce((x, [, a]) => x + a.n, 0);
+  check(`[振り直し/${label}] 合計は2300のまま`, total === 2300, `${total}問`);
+  check(`[振り直し/${label}] 回した分の積み上げがなくなる`, !live.some(([, a]) => a.extra || a.carried));
+  check(`[振り直し/${label}] 昨日以前の未済は明日以降に入る`, Object.keys(st.plan.m).filter(d => d < today && d > days[0]).every(d => st.plan.m[d].every(a => a.moved)));
+  const todayNow = (st.plan.m[today] || []).map(a => a.key);
+  check(`[振り直し/${label}] 今日の分は${includeToday ? "振り直しに入る" : "そのまま"}`, includeToday ? todayNow.length === 0 : JSON.stringify(todayNow) === JSON.stringify(todayKeys));
+  check(`[振り直し/${label}] 明日から配る`, st.plan.from === tomorrow);
+  const per = {}; live.filter(([d]) => d >= tomorrow).forEach(([d, a]) => { per[d] = (per[d] || 0) + a.n; });
+  const vals = Object.values(per);
+  check(`[振り直し/${label}] 1日の問題数がならされる`, Math.max(...vals) - Math.min(...vals) <= 30, `${Math.min(...vals)}〜${Math.max(...vals)}問`);
+}
+
 // 5. 回ごとの問題集は回と問題番号で割り振る
 {
   const st = sampleState(); st.books = [{ id: newId(), ...PRESETS.daiyo() }];

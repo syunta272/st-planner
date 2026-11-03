@@ -190,6 +190,31 @@ export function absorbLeftovers(st, today) {
   return true;
 }
 
+// できなかった問題をまとめて振り直す(「振り直す」ボタン)。済んでいない問題を、明日から過去問の終了日までの学習日に
+// 配り直す。昨日の分も待たずに入れる。今日に積み上がった解き残しも入れる。
+// includeToday なら今日のまだ済んでいない分もすべて入れる(今日は過去問なしになる)。
+export function respread(st, today, includeToday) {
+  freezePast(st, today);
+  if (st.plan?.m[today]) {
+    const keep = st.plan.m[today].filter(a => isDone(st, today, a) || (!includeToday && !a.extra && !a.carried));
+    const m = { ...st.plan.m };
+    if (keep.length) m[today] = keep; else delete m[today];
+    st.plan = { ...st.plan, m };
+  }
+  st.plan = generatePlan(st, addDays(today, 1));
+}
+
+// まだ済んでいない、回し待ち・回した分の問題数(今日の画面の「振り直す」案内に使う)
+export function unfinishedCount(st, today) {
+  const y = addDays(today, -1);
+  let n = 0;
+  for (const [ds, list] of Object.entries(st.plan?.m || {})) for (const a of list) {
+    if (isDone(st, ds, a) || a.moved) continue;
+    if (ds === y || ((a.extra || a.carried) && ds >= today)) n += a.n;
+  }
+  return n;
+}
+
 // 昨日の分で、まだ回していない問題(今日の画面に「昨日の残り」として出す)。
 // 今日の画面でチェックした分は done[今日] に "late:<key>" を残し、チェック後も表示し続ける。
 export function pendingFromYesterday(st, today) {

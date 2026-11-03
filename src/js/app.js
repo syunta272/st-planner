@@ -85,6 +85,8 @@ const V = {
     const banners = [];
     const lastB = s.lastBackup || s.setupDate;
     if (lastB && D.diffDays(lastB, t) >= 7) banners.push(`<div class="banner">${s.lastBackup ? `最後のバックアップから${D.diffDays(lastB, t)}日たちました。` : "まだバックアップを書き出していません。"}パソコンの故障に備えて書き出しておきましょう。 <button class="p" data-act="backup">いま書き出す</button></div>`);
+    const left = cur === t ? SC.unfinishedCount(state, t) : 0;
+    if (left >= 30) banners.push(`<div class="banner">できなかった問題が${left}問たまっています。明日からの予定に均等に振り直せます。 <button class="p" data-act="go" data-arg="plan">振り直しへ</button></div>`);
     if (s.calendar && state.icsStale) banners.push(`<div class="banner info">計画が変わりました。Googleカレンダーの予定も新しくするには、書き出し直して読み込んでください。 <button class="p" data-act="ics">カレンダーに書き出す</button></div>`);
     if (cur === t) {
       const un = SC.unrecordedDays(state, t);
@@ -144,7 +146,12 @@ const V = {
     return `<h1>計画</h1><p class="mut">決めた期間で全問を解き終わるように、問題数に比例して分野ごとの日数を割り振り、同じ分野が続かないように日をばらします。条件を変えると、明日以降の計画が組み直されます(済んだ日の記録は残ります)。</p>
       <div class="card"><h2>過去問1周の期間</h2><div class="row">${field("開始日", inp("settings.qStart", "date"))}${field("終了日", inp("settings.qEnd", "date"))}${field("1問あたり(分)", num("settings.mpq", 'step="0.1" min="0.3"'))}
       ${field("解き残しの回し先", sel("settings.leftover", [["spread", "残りの学習日に振り分ける"], ["review", "次の復習の日に回す"]]))}</div>
-      ${planSummary(true)}<div class="row"><button data-act="replanNow">いますぐ作り直す</button><span class="mut">予定どおり解けなかった問題を、上の設定に従って回します。</span></div></div>
+      ${planSummary(true)}</div>
+      <div class="card"><h2>できなかった問題を振り直す</h2>
+      <p class="mut">何日かできなかったときに使います。まだ済んでいない問題を、明日から過去問の終了日までの学習日に均等に配り直します。済んだ問題と記録はそのままです。</p>
+      ${SC.unfinishedCount(state, D.today()) ? `<p>いま、できなかった問題が <b>${SC.unfinishedCount(state, D.today())}問</b> あります。</p>` : ""}
+      <div class="row"><label class="chk"><input type="checkbox" id="rs-today"> 今日の分もまだやっていないので、振り直しに入れる</label></div>
+      <div class="row"><button class="p" data-act="respread">振り直す</button></div></div>
       <div class="card"><h2>分野ごとの日程</h2>${(p.blocks || []).length ? `<table><tr><th>分野・回</th><th class="num">残り</th><th>日程</th></tr>${p.blocks.map(b => `<tr><td>${esc(b.label)}</td><td class="num">${b.count}問</td><td class="mut">${b.days.map(D.md).join("・")}(${b.days.length}日)</td></tr>`).join("")}</table>` : `<p class="mut">期間内の残りの問題はありません。</p>`}</div>
       <div class="card"><h2>問題集と問題数</h2>${booksEditor()}</div>`;
   },
@@ -313,7 +320,13 @@ const ACT = {
   },
   reflect(r) { state.focus[r] = { from: D.today(), list: SC.weakList(state).slice(0, 6) }; persist(); render(); toast("この週のタスクに反映しました"); },
   unreflect(r) { delete state.focus[r]; persist(); render(); },
-  replanNow() { replan(); persist(); render(); toast("計画を作り直しました"); },
+  respread() {
+    const t = D.today(), withToday = !!$("#rs-today")?.checked, n = SC.unfinishedCount(state, t);
+    if (!confirm(`できなかった問題を、明日(${D.md(D.addDays(t, 1))})からの学習日に振り直します。${withToday ? "今日の分も入れます。" : "今日の分はそのままです。"}\nよろしいですか?`)) return;
+    SC.respread(state, t, withToday);
+    if (state.settings.calendar && state.settings.lastIcsExport) state.icsStale = true;
+    persist(); render(); toast(n ? `${n}問ほどを明日から振り直しました` : "明日からの計画を振り直しました");
+  },
   addSpecial(type) {
     const base = { id: newId(), type, start: D.today() };
     Object.assign(base, { practicum: { end: D.today(), reserve: 15 }, mock: { name: "模試", from: "09:00", to: "16:00" }, full: { name: "通し演習", from: "10:00", to: "16:00" }, final: { from: "17:00", to: "17:45" }, off: { memo: "" } }[type]);
