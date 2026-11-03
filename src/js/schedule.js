@@ -343,8 +343,9 @@ export function weakList(st) {
 }
 
 // アプリを開いたときに表示する、記録のない学習日(通知の代わり)
+// 「できなかった日」として登録した日(st.skipped)は出さない
 export function unrecordedDays(st, today) {
-  const s = st.settings, out = [], logged = new Set(st.logs.map(l => l.date));
+  const s = st.settings, out = [], logged = new Set([...st.logs.map(l => l.date), ...Object.keys(st.skipped || {})]);
   const from = [s.qStart, s.setupDate].filter(Boolean).sort().pop();
   if (!from) return out;
   for (let d = addDays(today, -1); d >= from && out.length < 7; d = addDays(d, -1))

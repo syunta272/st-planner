@@ -145,6 +145,19 @@ for (const includeToday of [false, true]) {
   check(`[振り直し/${label}] 1日の問題数がならされる`, Math.max(...vals) - Math.min(...vals) <= 30, `${Math.min(...vals)}〜${Math.max(...vals)}問`);
 }
 
+// 4d. 記録がまだの日と「できなかった日」
+{
+  const st = sampleState(); st.settings.setupDate = "2026-10-30";
+  st.plan = SC.generatePlan(st, "2026-11-01");
+  const days = Object.keys(st.plan.m).sort(), today = days[4];
+  st.logs.push({ id: "x", date: days[0], kind: "normal", area: 0, minutes: 30, solved: 10, correct: 5, rate: 50 });
+  const before = SC.unrecordedDays(st, today);
+  check("記録した日は「記録がまだの日」に出ない", !before.includes(days[0]) && before.includes(days[1]), before.join(","));
+  st.skipped = { [days[1]]: true };
+  const after = SC.unrecordedDays(st, today);
+  check("「できなかった日」にした日は出なくなる", !after.includes(days[1]) && after.includes(days[2]), after.join(","));
+}
+
 // 5. 回ごとの問題集は回と問題番号で割り振る
 {
   const st = sampleState(); st.books = [{ id: newId(), ...PRESETS.daiyo() }];

@@ -90,9 +90,12 @@ const V = {
     if (s.calendar && state.icsStale) banners.push(`<div class="banner info">計画が変わりました。Googleカレンダーの予定も新しくするには、書き出し直して読み込んでください。 <button class="p" data-act="ics">カレンダーに書き出す</button></div>`);
     if (cur === t) {
       const un = SC.unrecordedDays(state, t);
-      if (un.length) banners.push(`<div class="banner info">記録がまだの日: ${un.map(d => `<button class="link" data-act="day" data-arg="${d}">${D.md(d)}</button>`).join(" ")}</div>`);
+      if (un.length) banners.push(`<div class="banner info"><b>記録がまだの日</b> <span class="mut">勉強した日は記録を、何もできなかった日は「できなかった」を押してください。</span>
+        ${un.map(d => `<div class="row">${D.md(d)}(${D.WD[D.dow(d)]}) <button data-act="day" data-arg="${d}">記録する</button><button data-act="skipDay" data-arg="${d}">できなかった</button></div>`).join("")}</div>`);
     }
     if (state.edits[cur]) banners.push(`<p class="mut">この日のタスクは手動で編集しています。</p>`);
+    if (state.skipped?.[cur]) banners.push(`<div class="banner info">この日は「できなかった日」として登録しています。 <button data-act="unskipDay" data-arg="${cur}">取り消す</button></div>`);
+    else if (cur < t && (state.plan?.m[cur] || []).length && !state.logs.some(l => l.date === cur)) banners.push(`<div class="row"><span class="mut">この日に何もできなかったときは:</span><button data-act="skipDay" data-arg="${cur}">できなかった日にする</button></div>`);
     return `<h1>${cur === t ? "今日" : esc(D.label(cur))}</h1>
       <p class="mut">${esc(D.label(cur))} · <span class="countdown">${esc(countdown())}</span></p>
       ${banners.join("")}
@@ -320,6 +323,12 @@ const ACT = {
   },
   reflect(r) { state.focus[r] = { from: D.today(), list: SC.weakList(state).slice(0, 6) }; persist(); render(); toast("この週のタスクに反映しました"); },
   unreflect(r) { delete state.focus[r]; persist(); render(); },
+  // 何もできなかった日を登録し、「記録がまだの日」に出さないようにする。問題は解き残しとして回される
+  skipDay(d) {
+    (state.skipped ||= {})[d] = true;
+    persist(); render(); toast(`${D.md(d)}を「できなかった日」にしました。その日の問題はあとの日に回します`);
+  },
+  unskipDay(d) { delete state.skipped?.[d]; persist(); render(); },
   respread() {
     const t = D.today(), withToday = !!$("#rs-today")?.checked, n = SC.unfinishedCount(state, t);
     if (!confirm(`できなかった問題を、明日(${D.md(D.addDays(t, 1))})からの学習日に振り直します。${withToday ? "今日の分も入れます。" : "今日の分はそのままです。"}\nよろしいですか?`)) return;
