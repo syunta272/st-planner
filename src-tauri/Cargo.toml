@@ -1,6 +1,6 @@
 [package]
 name = "st-planner"
-version = "0.4.0"
+version = "0.5.0"
 description = "ST国試 学習プランナー"
 edition = "2021"
 

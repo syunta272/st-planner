@@ -3,6 +3,7 @@ import { addDays, dow, isHoliday } from "./dates.js";
 import { sampleState, PRESETS, newId } from "./defaults.js";
 import * as SC from "./schedule.js";
 import { buildIcs } from "./ics.js";
+import { mergeStates } from "./sync.js";
 
 const results = [];
 const check = (name, ok, detail = "") => results.push({ name, ok: !!ok, detail });
@@ -156,6 +157,26 @@ for (const includeToday of [false, true]) {
   st.skipped = { [days[1]]: true };
   const after = SC.unrecordedDays(st, today);
   check("「できなかった日」にした日は出なくなる", !after.includes(days[1]) && after.includes(days[2]), after.join(","));
+}
+
+// 4e. パソコン間の同期: 2台で同時に変えても記録とチェックを失わない
+{
+  const base = sampleState(); base.plan = SC.generatePlan(base, "2026-11-01");
+  const d1 = "2026-11-02", d2 = "2026-11-03", k1 = base.plan.m[d1][0].key, k2 = base.plan.m[d2][0].key;
+  base.logs = [{ id: "old", date: d1, area: 0, minutes: 10 }, { id: "gone", date: d1, area: 0, minutes: 5 }];
+  const mini = JSON.parse(JSON.stringify(base)), neo = JSON.parse(JSON.stringify(base));
+  // Mac mini: 11/2 をチェックして記録、「gone」を削除(先に保存)
+  mini.done = { [d1]: [k1] }; mini.doneUpdated = { [d1]: 100 }; mini.logs.push({ id: "mini", date: d1, area: 1, minutes: 50 });
+  mini.logs = mini.logs.filter(l => l.id !== "gone"); mini.deletedLogs = ["gone"]; mini.savedAt = 100;
+  // MacBook: 11/3 をチェックして記録(あとで保存)。11/2 は前に付けたチェックを外した
+  neo.done = { [d1]: [], [d2]: [k2] }; neo.doneUpdated = { [d1]: 50, [d2]: 200 }; neo.logs.push({ id: "neo", date: d2, area: 2, minutes: 40 }); neo.savedAt = 200;
+  neo.settings.targetRate = 80;
+  const m = mergeStates(mini, neo), m2 = mergeStates(neo, mini);
+  check("[同期] 両方の記録が残る", ["old", "mini", "neo"].every(id => m.logs.some(l => l.id === id)), m.logs.map(l => l.id).join(","));
+  check("[同期] 片方で削除した記録は消える", !m.logs.some(l => l.id === "gone"));
+  check("[同期] チェックは日付ごとに、あとで変えた方を使う", m.done[d1].includes(k1) && m.done[d2].includes(k2));
+  check("[同期] 設定はあとで保存した方を使う", m.settings.targetRate === 80);
+  check("[同期] どちらから合わせても同じ結果", JSON.stringify(m.done) === JSON.stringify(m2.done) && m.logs.length === m2.logs.length);
 }
 
 // 5. 回ごとの問題集は回と問題番号で割り振る

@@ -43,7 +43,7 @@ export function emptyState() {
     areas: AREAS.map(name => ({ name, weight: "normal" })),
     books: [],
     specials: SCHOOL_MOCKS.map(m => ({ id: newId(), type: "mock", name: m.name, start: m.start, from: "09:00", to: "16:00" })),
-    plan: null, done: {}, edits: {}, frozen: {}, frozenThrough: null, focus: {}, logs: [], icsStale: false, skipped: {},
+    plan: null, done: {}, edits: {}, frozen: {}, frozenThrough: null, focus: {}, logs: [], icsStale: false, skipped: {}, doneUpdated: {}, deletedLogs: [],
   };
 }
 

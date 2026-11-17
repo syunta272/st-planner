@@ -1,6 +1,7 @@
 import * as D from "./dates.js";
 import { PRESETS, WEIGHTS, emptyState, sampleState, distributeByDb, newId } from "./defaults.js";
 import * as SC from "./schedule.js";
+import * as ST from "./store.js";
 import { loadState, saveState, exportBackup, saveTextFile, parseBackup, readFileText } from "./store.js";
 import { buildIcs } from "./ics.js";
 
@@ -182,11 +183,22 @@ const V = {
       <li>右上の歯車 →「設定」→ 左の「インポート/エクスポート」</li>
       <li>「パソコンからファイルを選択」で書き出したファイルを選び、追加先を「ST国試」にして「インポート」</li></ol>
       <p class="mut">計画が変わったら、書き出し直して同じように読み込みます。予定が二重になったときは、「ST国試」カレンダーを削除して作り直してから読み込んでください。</p>` : `<p class="mut">オンにすると、勉強の予定をGoogleカレンダーに入れられます。使わない人はオフのままで大丈夫です。</p>`}</div>
+      <div class="card"><h2>パソコン間の同期</h2>${syncCard()}</div>
       <div class="card"><h2>表示</h2><div class="row">${field("テーマ", sel("settings.theme", [["system", "パソコンに合わせる"], ["light", "ライト"], ["dark", "ダーク"]]))}${field("文字サイズ", sel("settings.fontScale", [[0.9, "小"], [1, "標準"], [1.15, "大"], [1.3, "特大"]], true))}</div></div>
       <div class="card"><h2>データのバックアップ</h2><p class="mut">設定と記録をすべて1つのファイルに書き出し、読み込んで元に戻せます。最後の書き出し: ${s.lastBackup ? esc(D.label(s.lastBackup)) : "まだありません"}</p>
       <div class="row"><button class="p" data-act="backup">書き出す</button><label class="field"><span>バックアップから元に戻す</span><input type="file" accept=".json,application/json" data-file="restore"></label></div></div>`;
   },
 };
+
+function syncCard() {
+  if (!ST.isDesktop()) return `<p class="mut">デスクトップアプリでのみ使えます。</p>`;
+  const dir = ST.syncFolder(), mac = /Mac/.test(navigator.userAgent);
+  return `<p class="mut">2台のパソコン(例: MacBookとMac mini)で、同じクラウドのフォルダを選ぶと、記録・チェック・計画が同じになります。片方で入力すると、もう片方はアプリに戻ったとき(開いている間は30秒ごと)に反映されます。</p>
+    ${ST.syncError ? `<p class="err">${esc(ST.syncError)}</p>` : ""}
+    <p>いまの保存先: <b>${dir ? esc(dir) : "このパソコンだけ"}</b></p>
+    <div class="row">${mac ? `<button class="p" data-act="syncICloud">iCloud Driveで同期する</button>` : ""}<button data-act="syncPick">フォルダを選んで同期する</button>${dir ? `<button class="danger" data-act="syncOff">同期をやめる</button>` : ""}</div>
+    <p class="mut">2台目では、1台目と同じフォルダを選んでください。それぞれのパソコンのデータは消えずに合わさります。Googleドライブ・OneDriveのフォルダも選べます。</p>`;
+}
 
 function timeFields(withExam = true) {
   return `${withExam ? `<div class="row">${field("試験日", inp("settings.examDate", "date"))}</div>` : ""}
@@ -282,6 +294,7 @@ const ACT = {
   toggle(key, el) {
     const at = el?.dataset.at || "", list = state.done[at || cur] ||= [], i = list.indexOf(key);
     const late = state.done[cur] ||= [], mark = "late:" + key;
+    const du = state.doneUpdated ||= {}; du[at || cur] = du[cur] = Date.now(); // 同期でどちらのチェックが新しいか比べる
     if (i >= 0) { list.splice(i, 1); if (at && late.includes(mark)) late.splice(late.indexOf(mark), 1); if (quick === key) quick = null; }
     else { list.push(key); if (at && !late.includes(mark)) late.push(mark); const x = todayList().find(t => t.key === key); quick = x?.assign ? key : null; }
     persist(); render();
@@ -309,7 +322,7 @@ const ACT = {
   },
   logEdit(id) { logEdit = id; render(); scrollTo(0, 0); },
   logCancel() { logEdit = null; render(); },
-  logDel(id) { if (!confirm("この記録を削除しますか?")) return; state.logs = state.logs.filter(x => x.id !== id); persist(); render(); },
+  logDel(id) { if (!confirm("この記録を削除しますか?")) return; state.logs = state.logs.filter(x => x.id !== id); (state.deletedLogs ||= []).push(id); persist(); render(); },
   mockSave() {
     const date = $("#mk-date").value, name = $("#mk-name").value || "模試";
     let n = 0;
@@ -323,6 +336,12 @@ const ACT = {
   },
   reflect(r) { state.focus[r] = { from: D.today(), list: SC.weakList(state).slice(0, 6) }; persist(); render(); toast("この週のタスクに反映しました"); },
   unreflect(r) { delete state.focus[r]; persist(); render(); },
+  async syncICloud() { try { await connectSync(await ST.iCloudFolder()); } catch (e) { alert(e.message); } },
+  async syncPick() { try { const dir = await ST.pickFolder(); if (dir) await connectSync(dir); } catch (e) { alert("同期を始められませんでした: " + e.message); } },
+  async syncOff() {
+    if (!confirm("同期をやめて、このパソコンだけに保存しますか?(フォルダのデータはそのまま残ります)")) return;
+    await ST.disconnectFolder(state); render(); toast("このパソコンだけに保存します");
+  },
   // 何もできなかった日を登録し、「記録がまだの日」に出さないようにする。問題は解き残しとして回される
   skipDay(d) {
     (state.skipped ||= {})[d] = true;
@@ -459,6 +478,12 @@ function matchArea(s) {
 
 document.addEventListener("change", e => { if (e.target.id === "cur" && e.target.value) ACT.day(e.target.value); });
 
+async function connectSync(dir) {
+  const r = await ST.connectFolder(dir, state);
+  state = { ...emptyState(), ...r.state }; applyTheme(); render();
+  toast(r.found ? "フォルダのデータと合わせて、同期を始めました" : "同期を始めました。2台目でも同じフォルダを選んでください");
+}
+
 /* ---------- 起動 ---------- */
 (async () => {
   state = { ...emptyState(), ...(await loadState() || {}) };
@@ -471,6 +496,16 @@ document.addEventListener("change", e => { if (e.target.id === "cur" && e.target
     persist();
   } else if (!state.plan) state.plan = SC.generatePlan(state, t);
   render();
+  // ほかのパソコンの変更を取り込む(同期フォルダを使っているとき)
+  ST.setStateGetter(() => state);
+  ST.setOnExternalChange(merged => {
+    const typing = document.activeElement?.matches?.("input, textarea, select");
+    state = { ...emptyState(), ...merged }; applyTheme();
+    if (!typing) render();
+  });
+  const pull = () => ST.checkExternal(state);
+  window.addEventListener("focus", pull);
+  setInterval(() => { if (document.visibilityState === "visible") pull(); }, 30_000);
   // 日付が変わったら自動で切り替える(F-01)
   setInterval(() => {
     const now = D.today();
